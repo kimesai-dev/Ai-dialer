@@ -2,20 +2,22 @@ import express from 'express';
 import { config } from 'dotenv';
 import { OpenAI } from 'openai';
 import twilio from 'twilio';
+import axios from 'axios';
 
 config();
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
-
-// Optional: for debugging OpenAI POSTs in the future
 app.use(express.json());
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 const conversations = new Map();
 
-const systemPrompt = "You're Daniel's AI assistant. A seller has just called in. Start the conversation by confirming who they are and asking if they’re open to a cash offer.";
+const systemPrompt =
+  "You're Daniel's AI assistant. A seller has just called in. Start the conversation by confirming who they are and asking if they’re open to a cash offer.";
 
+// === AI Webhook ===
 app.post('/webhook', async (req, res) => {
   const callSid = req.body.CallSid;
   const speechResult = req.body.SpeechResult;
@@ -61,12 +63,12 @@ app.post('/webhook', async (req, res) => {
   res.send(twiml.toString());
 });
 
-// Optional GET route to test if the server is live in browser
+// === Root Test Route ===
 app.get('/', (req, res) => {
   res.send('🧠 AI Dialer is running');
 });
-import axios from 'axios';
 
+// === DealMachine Sync & Call Route ===
 app.get('/dealsync', async (req, res) => {
   const { limit = 5 } = req.query;
 
@@ -78,6 +80,8 @@ app.get('/dealsync', async (req, res) => {
     });
 
     const leads = response.data?.data || [];
+    console.log('🔍 Raw DealMachine leads:', JSON.stringify(leads.slice(0, 3), null, 2));
+
     let count = 0;
 
     for (const lead of leads) {
@@ -104,6 +108,7 @@ app.get('/dealsync', async (req, res) => {
   }
 });
 
+// === Start Server ===
 const PORT = process.env.PORT || 5050;
 app.listen(PORT, () => {
   console.log(`✅ Server is listening on port ${PORT}`);
