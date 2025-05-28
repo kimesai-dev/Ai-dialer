@@ -65,6 +65,44 @@ app.post('/webhook', async (req, res) => {
 app.get('/', (req, res) => {
   res.send('🧠 AI Dialer is running');
 });
+import axios from 'axios';
+
+app.get('/dealsync', async (req, res) => {
+  const { limit = 5 } = req.query;
+
+  try {
+    const response = await axios.get('https://api.dealmachine.com/api/v1/properties', {
+      headers: {
+        Authorization: `Bearer ${process.env.DEALMACHINE_API_KEY}`,
+      },
+    });
+
+    const leads = response.data?.data || [];
+    let count = 0;
+
+    for (const lead of leads) {
+      const phone = lead.attributes?.owner_phone;
+
+      if (!phone || !phone.startsWith('+1')) continue;
+
+      console.log(`📞 Calling: ${phone}`);
+
+      await twilioClient.calls.create({
+        url: 'https://ai-dialer.onrender.com/webhook',
+        to: phone,
+        from: process.env.TWILIO_PHONE_NUMBER,
+      });
+
+      count++;
+      if (count >= limit) break;
+    }
+
+    res.send(`✅ Called ${count} DealMachine leads`);
+  } catch (err) {
+    console.error('❌ DealMachine sync failed:', err.response?.data || err.message);
+    res.status(500).send('Failed to sync leads');
+  }
+});
 
 const PORT = process.env.PORT || 5050;
 app.listen(PORT, () => {
