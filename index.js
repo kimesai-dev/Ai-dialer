@@ -1,12 +1,5 @@
 /* ---------------------------------------------------------------------- */
 /*  AI Dialer – Full Server File                                          */
-/*  Requires:                                                             */
-/*    - OPENAI_API_KEY                                                    */
-/*    - OPENAI_MODEL        (optional, default = gpt-4o)                  */
-/*    - DEALMACHINE_API_KEY                                               */
-/*    - TWILIO_ACCOUNT_SID                                                */
-/*    - TWILIO_AUTH_TOKEN                                                 */
-/*    - TWILIO_PHONE_NUMBER                                               */
 /* ---------------------------------------------------------------------- */
 
 import express from 'express';
@@ -17,29 +10,27 @@ import axios from 'axios';
 import util from 'util';
 import { logLead } from './logLead.js';
 
-config();                                // load .env
+config();
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 /* ----------  Clients  ---------- */
-const openai       = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
+  process.env.TWILIO_AUTH_TOKEN,
 );
 const pretty = (o) => util.inspect(o, { depth: 4, colors: false });
 
-/* ----------  Conversation store  ---------- */
+/* ----------  Memory chat store  ---------- */
 const conversations = new Map();
 const systemPrompt =
   "You're Daniel's AI assistant. A seller has just called in. " +
   "Start the conversation by confirming who they are and asking if they’re open to a cash offer.";
 
-/* ------------------------------------------------------------------ */
-/*  /webhook – Twilio speech gather                                   */
-/* ------------------------------------------------------------------ */
+/* ----------  /webhook  ---------- */
 app.post('/webhook', async (req, res) => {
   const { CallSid: sid, SpeechResult: speech } = req.body;
 
@@ -50,11 +41,11 @@ app.post('/webhook', async (req, res) => {
 
   let say = "Sorry, I'm having trouble understanding you.";
   try {
-    const resp = await openai.chat.completions.create({
+    const r = await openai.chat.completions.create({
       model: process.env.OPENAI_MODEL || 'gpt-4o',
       messages: msgs,
     });
-    const ai = resp.choices?.[0]?.message?.content?.trim();
+    const ai = r.choices?.[0]?.message?.content?.trim();
     if (ai) {
       msgs.push({ role: 'assistant', content: ai });
       say = ai;
@@ -72,18 +63,16 @@ app.post('/webhook', async (req, res) => {
   res.type('text/xml').send(twiml.toString());
 });
 
-/* ------------------------------------------------------------------ */
+/* ----------  Health check  ---------- */
 app.get('/', (_, res) => res.send('🧠 AI Dialer is running'));
 
-/* ------------------------------------------------------------------ */
-/*  /dealsync – pull leads & autodial                                  */
-/* ------------------------------------------------------------------ */
+/* ----------  /dealsync  ---------- */
 app.get('/dealsync', async (req, res) => {
   const maxCalls = parseInt(req.query.limit, 10) || 3;
 
-  /* ---  DealMachine API client (NEW HOST)  --- */
+  /* ✅  correct base URL */
   const dm = axios.create({
-    baseURL: 'https://dealmachine.app/public/api/v1',
+    baseURL: 'https://dealmachine.app/api/v1',
     headers: {
       Authorization: `Bearer ${process.env.DEALMACHINE_API_KEY}`,
       Accept: 'application/json',
@@ -104,21 +93,15 @@ app.get('/dealsync', async (req, res) => {
         },
       });
 
-      /* ---- Defensive guard ------------------------------------------------ */
       const leads = Array.isArray(body?.data) ? body.data : [];
       if (!Array.isArray(body?.data)) {
-        console.error(
-          '⚠️  Unexpected DealMachine response (first 800 chars):\n',
-          pretty(body).slice(0, 800)
-        );
+        console.error('⚠️  Unexpected DM payload:\n', pretty(body).slice(0, 800));
       }
-      /* -------------------------------------------------------------------- */
 
       console.log(`🔎  Page ${page} → ${leads.length} leads`);
       if (!leads.length) break;
 
       for (const lead of leads) {
-        /* 1️⃣ owner.phones, 2️⃣ contacts[0].phone fallback */
         let phones = lead.attributes.owner?.phones ?? [];
         if (!phones.length && lead.attributes.contacts?.length) {
           const cp = lead.attributes.contacts[0].phone;
@@ -141,8 +124,8 @@ app.get('/dealsync', async (req, res) => {
 
           try {
             await twilioClient.calls.create({
-              url:  'https://ai-dialer.onrender.com/webhook',
-              to:   p.number,
+              url: 'https://ai-dialer.onrender.com/webhook',
+              to: p.number,
               from: process.env.TWILIO_PHONE_NUMBER,
             });
             console.log('✅ Queued:', p.number);
@@ -168,17 +151,15 @@ app.get('/dealsync', async (req, res) => {
   }
 });
 
-/* ------------------------------------------------------------------ */
+/* ----------  Misc routes  ---------- */
 app.post('/log-lead', async (req, res) => {
   try {
     await logLead(req.body);
     res.send('✅ Lead logged');
   } catch (e) {
-    console.error('log-lead error:', e.message);
     res.status(500).send('Failed to log lead');
   }
 });
-/* ------------------------------------------------------------------ */
 app.get('/test-log', async (_, res) => {
   try {
     await logLead({
@@ -191,10 +172,11 @@ app.get('/test-log', async (_, res) => {
       messages: [{ role: 'assistant', content: 'Hello' }],
     });
     res.send('✅ Test row written');
-  } catch (e) {
+  } catch {
     res.status(500).send('Sheets write failed');
   }
 });
-/* ------------------------------------------------------------------ */
+
+/* ----------  Start server  ---------- */
 const PORT = process.env.PORT || 5050;
 app.listen(PORT, () => console.log(`✅ Server listening on ${PORT}`));
