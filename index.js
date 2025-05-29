@@ -24,7 +24,7 @@ const twilioClient = twilio(
 );
 const pretty = (o) => util.inspect(o, { depth: 4, colors: false });
 
-/* ----------  Memory chat store  ---------- */
+/* ----------  Conversation store  ---------- */
 const conversations = new Map();
 const systemPrompt =
   "You're Daniel's AI assistant. A seller has just called in. " +
@@ -70,7 +70,6 @@ app.get('/', (_, res) => res.send('🧠 AI Dialer is running'));
 app.get('/dealsync', async (req, res) => {
   const maxCalls = parseInt(req.query.limit, 10) || 3;
 
-  /* ✅  correct base URL */
   const dm = axios.create({
     baseURL: 'https://dealmachine.app/api/v1',
     headers: {
@@ -84,7 +83,8 @@ app.get('/dealsync', async (req, res) => {
 
   try {
     while (placed < maxCalls) {
-      const { data: body } = await dm.get('/leads', {
+      /*  🔑  LIST ENDPOINT IS /properties/  */
+      const { data: body, status, request } = await dm.get('/properties/', {
         params: {
           'filter[tags]': 'Follow Up Needed',
           include: 'owner,phones,contacts',
@@ -92,14 +92,12 @@ app.get('/dealsync', async (req, res) => {
           'page[size]': 100,
         },
       });
+      console.log(`🛰️  DM GET ${request.path} → HTTP ${status}`);
 
       const leads = Array.isArray(body?.data) ? body.data : [];
-      if (!Array.isArray(body?.data)) {
-        console.error('⚠️  Unexpected DM payload:\n', pretty(body).slice(0, 800));
-      }
+      if (!leads.length) break;
 
       console.log(`🔎  Page ${page} → ${leads.length} leads`);
-      if (!leads.length) break;
 
       for (const lead of leads) {
         let phones = lead.attributes.owner?.phones ?? [];
@@ -156,7 +154,7 @@ app.post('/log-lead', async (req, res) => {
   try {
     await logLead(req.body);
     res.send('✅ Lead logged');
-  } catch (e) {
+  } catch {
     res.status(500).send('Failed to log lead');
   }
 });
