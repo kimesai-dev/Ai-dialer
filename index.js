@@ -87,7 +87,7 @@ app.get('/dealsync', async (req, res) => {
     let count = 0;
 
     for (const lead of leads) {
-      const phone = lead.attributes?.owner_phone;
+      console.log("📦 Full lead attributes:", JSON.stringify(lead.attributes, null, 2));
 
       if (!phone || !phone.startsWith('+1')) continue;
 
