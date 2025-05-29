@@ -93,6 +93,12 @@ app.get('/dealsync', async (req, res) => {
     for (const lead of leads) {
       console.log("📦 Full lead attributes:", JSON.stringify(lead.attributes, null, 2));
 
+      const phone =
+        lead.attributes?.owner_phone ||
+        lead.attributes?.contacts?.[0]?.phone ||
+        lead.attributes?.skip_traced_phones?.[0]?.number ||
+        null;
+
       if (!phone || !phone.startsWith('+1')) continue;
 
       console.log(`📞 Calling: ${phone}`);
@@ -100,7 +106,7 @@ app.get('/dealsync', async (req, res) => {
       try {
         await logLead({
           phone,
-          address: lead.attributes?.address,
+          address: lead.attributes?.address || 'Unknown',
           callTime: new Date().toISOString(),
           tags: lead.attributes?.tags || [],
           status: 'Not contacted yet',
@@ -128,10 +134,7 @@ app.get('/dealsync', async (req, res) => {
   }
 });
 
-// === Lead Logging Helper ===
-// logLead imported from ./logLead.js
-
-// === Log Lead Route ===
+// === Lead Logging API Route ===
 app.post('/log-lead', async (req, res) => {
   try {
     await logLead(req.body);
