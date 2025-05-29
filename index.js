@@ -14,100 +14,73 @@ import { config } from 'dotenv';
 import { OpenAI } from 'openai';
 import twilio from 'twilio';
 import axios from 'axios';
-import util from 'util';                 // ➜ pretty-print helper
-import { logLead } from './logLead.js';  // 📝  your Google-Sheets helper
+import util from 'util';
+import { logLead } from './logLead.js';
 
-config();                                // loads .env
-
-/* ----------  Express setup  ---------- */
+config();                                // load .env
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-/* ----------  OpenAI & Twilio clients  ---------- */
-
+/* ----------  Clients  ---------- */
 const openai       = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN,
+  process.env.TWILIO_AUTH_TOKEN
 );
+const pretty = (o) => util.inspect(o, { depth: 4, colors: false });
 
-/* ----------  In-memory conversation store  ---------- */
-
+/* ----------  Conversation store  ---------- */
 const conversations = new Map();
 const systemPrompt =
   "You're Daniel's AI assistant. A seller has just called in. " +
   "Start the conversation by confirming who they are and asking if they’re open to a cash offer.";
 
-/* ----------  Helper for nicer log output ---------- */
-const pretty = (obj) => util.inspect(obj, { depth: 4, colors: false });
-
-/* ---------------------------------------------------------------------- */
-/*  /webhook  – Twilio <Gather> POST back                                 */
-/* ---------------------------------------------------------------------- */
+/* ------------------------------------------------------------------ */
+/*  /webhook – Twilio speech gather                                   */
+/* ------------------------------------------------------------------ */
 app.post('/webhook', async (req, res) => {
-  const { CallSid: callSid, SpeechResult: speechResult } = req.body;
+  const { CallSid: sid, SpeechResult: speech } = req.body;
 
-  console.log(`📞  Incoming call  | CallSid: ${callSid}`);
-  console.log(`🗣️   Caller said   | ${speechResult}`);
+  if (!conversations.has(sid))
+    conversations.set(sid, [{ role: 'system', content: systemPrompt }]);
+  const msgs = conversations.get(sid);
+  if (speech) msgs.push({ role: 'user', content: speech });
 
-  if (!conversations.has(callSid)) {
-    conversations.set(callSid, [{ role: 'system', content: systemPrompt }]);
-  }
-  const messages = conversations.get(callSid);
-
-  if (speechResult) {
-    messages.push({ role: 'user', content: speechResult });
-  }
-
-  /* ----  Ask OpenAI what to say next  ---- */
-  let sayText = "Sorry, I'm having trouble understanding you.";
-
+  let say = "Sorry, I'm having trouble understanding you.";
   try {
-    const response = await openai.chat.completions.create({
+    const resp = await openai.chat.completions.create({
       model: process.env.OPENAI_MODEL || 'gpt-4o',
-      messages,
+      messages: msgs,
     });
-
-    const aiMessage = response.choices?.[0]?.message?.content?.trim();
-    if (aiMessage) {
-      messages.push({ role: 'assistant', content: aiMessage });
-      sayText = aiMessage;
+    const ai = resp.choices?.[0]?.message?.content?.trim();
+    if (ai) {
+      msgs.push({ role: 'assistant', content: ai });
+      say = ai;
     }
-  } catch (err) {
-    console.error('❌ OpenAI error:', err.response?.data || err.message || err);
+  } catch (e) {
+    console.error('OpenAI error:', e.response?.data || e.message);
   }
 
-  /* ----  Build TwiML and respond  ---- */
   const { VoiceResponse } = twilio.twiml;
   const twiml = new VoiceResponse();
-  const gather = twiml.gather({
-    input: 'speech',
-    action: '/webhook',
-    method: 'POST',
-  });
-  gather.say({ voice: 'Polly.Matthew' }, sayText);
+  twiml
+    .gather({ input: 'speech', action: '/webhook', method: 'POST' })
+    .say({ voice: 'Polly.Matthew' }, say);
 
-  res.type('text/xml');
-  res.send(twiml.toString());
+  res.type('text/xml').send(twiml.toString());
 });
 
-/* ---------------------------------------------------------------------- */
-/*  Root route for quick uptime checks                                    */
-/* ---------------------------------------------------------------------- */
-app.get('/', (_req, res) => {
-  res.send('🧠 AI Dialer is running');
-});
+/* ------------------------------------------------------------------ */
+app.get('/', (_, res) => res.send('🧠 AI Dialer is running'));
 
-/* ---------------------------------------------------------------------- */
-/*  /dealsync  – Pull leads & autodial                                    */
-/*    Query param ?limit=N  caps calls per run (default 3)                */
-/* ---------------------------------------------------------------------- */
+/* ------------------------------------------------------------------ */
+/*  /dealsync – pull leads & autodial                                  */
+/* ------------------------------------------------------------------ */
 app.get('/dealsync', async (req, res) => {
   const maxCalls = parseInt(req.query.limit, 10) || 3;
 
-  /* ---  Axios instance that points at DealMachine  --- */
   const dm = axios.create({
     baseURL: 'https://api.dealmachine.com/api/v1',
     headers: {
@@ -117,103 +90,96 @@ app.get('/dealsync', async (req, res) => {
   });
 
   let page = 1;
-  let placedCalls = 0;
+  let placed = 0;
 
   try {
-    while (placedCalls < maxCalls) {
-      const { data } = await dm.get('/leads', {
+    while (placed < maxCalls) {
+      const { data: body } = await dm.get('/leads', {
         params: {
           'filter[tags]': 'Follow Up Needed',
-          include: 'owner,phones,contacts',   // ➜ include contacts for fallback
+          include: 'owner,phones,contacts',
           'page[number]': page,
           'page[size]': 100,
         },
       });
 
-      const leads = data.data;
-      console.log(`🔎  DealMachine page ${page} → ${leads.length} leads`);
-      if (leads[0]) {
-        console.log('📝 first lead sample ↓');
-        console.log(pretty({
-          ownerPhones: leads[0].attributes.owner?.phones,
-          contacts:    leads[0].attributes.contacts,
-          tags:        leads[0].attributes.tags,
-        }));
+      /* ---- Defensive guard ------------------------------------------------ */
+      const leads = Array.isArray(body?.data) ? body.data : [];
+      if (!Array.isArray(body?.data)) {
+        console.error(
+          '⚠️  Unexpected DealMachine response (showing first 800 chars):\n',
+          pretty(body).slice(0, 800)
+        );
       }
+      /* -------------------------------------------------------------------- */
 
-      if (leads.length === 0) break;            // no more pages
+      console.log(`🔎  Page ${page} → ${leads.length} leads`);
+      if (!leads.length) break;
 
       for (const lead of leads) {
-        /*  Extract phones: owner.phones first, then contacts fallback  */
+        /* 1️⃣  owner.phones, 2️⃣  contacts[0].phone fallback */
         let phones = lead.attributes.owner?.phones ?? [];
-        if (phones.length === 0 && lead.attributes.contacts?.length) {
-          const cPhone = lead.attributes.contacts[0].phone;
-          if (cPhone) phones = [{ number: cPhone, do_not_call: false }];
+        if (!phones.length && lead.attributes.contacts?.length) {
+          const cp = lead.attributes.contacts[0].phone;
+          if (cp) phones = [{ number: cp, do_not_call: false }];
         }
 
         for (const p of phones) {
-          if (p.do_not_call) continue;          // respect DNC
-          if (!p.number || !p.number.startsWith('+1')) continue;
+          if (p.do_not_call) continue;
+          if (!p.number?.startsWith('+1')) continue;
 
-          console.log(`📞 Calling: ${p.number}`);
-
-          /* -- Optional Google-Sheets log -- */
+          /* Optional Google-Sheets log */
           await logLead({
-            phone:    p.number,
-            address:  lead.attributes.address || 'Unknown',
+            phone: p.number,
+            address: lead.attributes.address || 'Unknown',
             callTime: new Date().toISOString(),
-            tags:     lead.attributes.tags || [],
-            status:   'Not contacted yet',
-            summary:  '',
+            tags: lead.attributes.tags || [],
+            status: 'Not contacted yet',
+            summary: '',
             messages: [],
           });
 
-          /* -- Launch outbound call with Twilio -- */
           try {
             await twilioClient.calls.create({
-              url:  'https://ai-dialer.onrender.com/webhook',   // public HTTPS URL
+              url:  'https://ai-dialer.onrender.com/webhook',
               to:   p.number,
               from: process.env.TWILIO_PHONE_NUMBER,
             });
-            console.log(`✅ Twilio queued ${p.number}`);
-          } catch (twilioErr) {
-            console.error('❌ Twilio error:', twilioErr.code, twilioErr.message);
+            console.log('✅ Queued:', p.number);
+          } catch (tErr) {
+            console.error('❌ Twilio error:', tErr.code, tErr.message);
           }
 
-          placedCalls += 1;
-          if (placedCalls >= maxCalls) break;
+          if (++placed >= maxCalls) break;
         }
-        if (placedCalls >= maxCalls) break;
+        if (placed >= maxCalls) break;
       }
 
-      page += 1;                                  // next DealMachine page
+      page += 1;
     }
 
-    console.log(`✅ Called ${placedCalls} leads`);
-    res.send(`✅ Called ${placedCalls} leads`);
+    res.send(`✅ Called ${placed} leads`);
   } catch (err) {
-    console.error('❌ dealsync error:', err.response?.data || err.message);
-    res.status(500).send('Failed to sync leads');
+    const msg = err.response?.data
+      ? JSON.stringify(err.response.data)
+      : err.message;
+    console.error('❌ dealsync error:', msg);
+    res.status(500).send(`Failed to sync leads: ${msg}`);
   }
 });
 
-/* ---------------------------------------------------------------------- */
-/*  /log-lead – called by client code to push final notes to Sheets        */
-/* ---------------------------------------------------------------------- */
+/* ------------------------------------------------------------------ */
 app.post('/log-lead', async (req, res) => {
   try {
     await logLead(req.body);
     res.send('✅ Lead logged');
-  } catch (err) {
-    console.error('❌ Failed to log lead:', err.response?.data || err.message);
+  } catch (e) {
+    console.error('log-lead error:', e.message);
     res.status(500).send('Failed to log lead');
   }
 });
-
-/* ---------------------------------------------------------------------- */
-/*  /test-log – sanity check your Google-Sheets helper                     */
-/* ---------------------------------------------------------------------- */
-app.get('/test-log', async (_req, res) => {
+/* ------------------------------------------------------------------ */
+app.get('/test-log', async (_, res) => {
   try {
     await logLead({
       phone: '+12601234567',
@@ -221,20 +187,14 @@ app.get('/test-log', async (_req, res) => {
       callTime: new Date().toISOString(),
       tags: ['test'],
       status: 'Test',
-      summary: 'Testing Sheets logging',
-      messages: [{ role: 'assistant', content: 'Hello from AI' }],
+      summary: 'Testing',
+      messages: [{ role: 'assistant', content: 'Hello' }],
     });
-    res.send('✅ Test row written to Google Sheet');
-  } catch (err) {
-    console.error('❌ Test log failed:', err.message);
-    res.status(500).send('Failed to log test lead');
+    res.send('✅ Test row written');
+  } catch (e) {
+    res.status(500).send('Sheets write failed');
   }
 });
-
-/* ---------------------------------------------------------------------- */
-/*  Start server                                                          */
-/* ---------------------------------------------------------------------- */
+/* ------------------------------------------------------------------ */
 const PORT = process.env.PORT || 5050;
-app.listen(PORT, () => {
-  console.log(`✅ Server is listening on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`✅ Server listening on ${PORT}`));
