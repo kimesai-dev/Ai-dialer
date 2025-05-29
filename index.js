@@ -81,8 +81,9 @@ app.get('/', (_, res) => res.send('🧠 AI Dialer is running'));
 app.get('/dealsync', async (req, res) => {
   const maxCalls = parseInt(req.query.limit, 10) || 3;
 
+  /* ---  DealMachine API client (NEW HOST)  --- */
   const dm = axios.create({
-    baseURL: 'https://api.dealmachine.com/api/v1',
+    baseURL: 'https://dealmachine.app/public/api/v1',
     headers: {
       Authorization: `Bearer ${process.env.DEALMACHINE_API_KEY}`,
       Accept: 'application/json',
@@ -107,7 +108,7 @@ app.get('/dealsync', async (req, res) => {
       const leads = Array.isArray(body?.data) ? body.data : [];
       if (!Array.isArray(body?.data)) {
         console.error(
-          '⚠️  Unexpected DealMachine response (showing first 800 chars):\n',
+          '⚠️  Unexpected DealMachine response (first 800 chars):\n',
           pretty(body).slice(0, 800)
         );
       }
@@ -117,7 +118,7 @@ app.get('/dealsync', async (req, res) => {
       if (!leads.length) break;
 
       for (const lead of leads) {
-        /* 1️⃣  owner.phones, 2️⃣  contacts[0].phone fallback */
+        /* 1️⃣ owner.phones, 2️⃣ contacts[0].phone fallback */
         let phones = lead.attributes.owner?.phones ?? [];
         if (!phones.length && lead.attributes.contacts?.length) {
           const cp = lead.attributes.contacts[0].phone;
@@ -128,7 +129,6 @@ app.get('/dealsync', async (req, res) => {
           if (p.do_not_call) continue;
           if (!p.number?.startsWith('+1')) continue;
 
-          /* Optional Google-Sheets log */
           await logLead({
             phone: p.number,
             address: lead.attributes.address || 'Unknown',
