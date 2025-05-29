@@ -79,6 +79,7 @@ app.get('/', (req, res) => {
 // === DealMachine Sync & Call Route ===
 app.get('/dealsync', async (req, res) => {
   const { limit = 5 } = req.query;
+  const maxCalls = parseInt(limit, 10) || 5;
 
   try {
     const response = await axios.get('https://api.dealmachine.com/api/v1/properties', {
@@ -99,6 +100,20 @@ app.get('/dealsync', async (req, res) => {
 
       console.log(`📞 Calling: ${phone}`);
 
+      try {
+        await logLead({
+          phone,
+          address: lead.attributes?.address,
+          callTime: new Date().toISOString(),
+          tags: lead.attributes?.tags || [],
+          status: 'Not contacted yet',
+          summary: '',
+          messages: [],
+        });
+      } catch (err) {
+        console.error('❌ Failed to log lead:', err.response?.data || err.message || err);
+      }
+
       await twilioClient.calls.create({
         url: 'https://ai-dialer.onrender.com/webhook',
         to: phone,
@@ -106,7 +121,7 @@ app.get('/dealsync', async (req, res) => {
       });
 
       count++;
-      if (count >= limit) break;
+      if (count >= maxCalls) break;
     }
 
     res.send(`✅ Called ${count} DealMachine leads`);
