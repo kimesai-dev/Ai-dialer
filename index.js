@@ -14,9 +14,10 @@ import { config } from 'dotenv';
 import { OpenAI } from 'openai';
 import twilio from 'twilio';
 import axios from 'axios';
-import { logLead } from './logLead.js';   // 📝  your Google-Sheets helper
+import util from 'util';                 // ➜ pretty-print helper
+import { logLead } from './logLead.js';  // 📝  your Google-Sheets helper
 
-config();                                  // loads .env
+config();                                // loads .env
 
 /* ----------  Express setup  ---------- */
 
@@ -38,6 +39,9 @@ const conversations = new Map();
 const systemPrompt =
   "You're Daniel's AI assistant. A seller has just called in. " +
   "Start the conversation by confirming who they are and asking if they’re open to a cash offer.";
+
+/* ----------  Helper for nicer log output ---------- */
+const pretty = (obj) => util.inspect(obj, { depth: 4, colors: false });
 
 /* ---------------------------------------------------------------------- */
 /*  /webhook  – Twilio <Gather> POST back                                 */
@@ -120,41 +124,61 @@ app.get('/dealsync', async (req, res) => {
       const { data } = await dm.get('/leads', {
         params: {
           'filter[tags]': 'Follow Up Needed',
-          include: 'owner,phones',
+          include: 'owner,phones,contacts',   // ➜ include contacts for fallback
           'page[number]': page,
           'page[size]': 100,
         },
       });
 
       const leads = data.data;
-      if (leads.length === 0) break;             // no more pages
+      console.log(`🔎  DealMachine page ${page} → ${leads.length} leads`);
+      if (leads[0]) {
+        console.log('📝 first lead sample ↓');
+        console.log(pretty({
+          ownerPhones: leads[0].attributes.owner?.phones,
+          contacts:    leads[0].attributes.contacts,
+          tags:        leads[0].attributes.tags,
+        }));
+      }
+
+      if (leads.length === 0) break;            // no more pages
 
       for (const lead of leads) {
-        const phones = lead.attributes.owner?.phones ?? [];
+        /*  Extract phones: owner.phones first, then contacts fallback  */
+        let phones = lead.attributes.owner?.phones ?? [];
+        if (phones.length === 0 && lead.attributes.contacts?.length) {
+          const cPhone = lead.attributes.contacts[0].phone;
+          if (cPhone) phones = [{ number: cPhone, do_not_call: false }];
+        }
 
         for (const p of phones) {
-          if (p.do_not_call) continue;           // respect DNC
+          if (p.do_not_call) continue;          // respect DNC
           if (!p.number || !p.number.startsWith('+1')) continue;
 
           console.log(`📞 Calling: ${p.number}`);
 
           /* -- Optional Google-Sheets log -- */
           await logLead({
-            phone:   p.number,
-            address: lead.attributes.address || 'Unknown',
+            phone:    p.number,
+            address:  lead.attributes.address || 'Unknown',
             callTime: new Date().toISOString(),
-            tags:    lead.attributes.tags || [],
-            status:  'Not contacted yet',
-            summary: '',
+            tags:     lead.attributes.tags || [],
+            status:   'Not contacted yet',
+            summary:  '',
             messages: [],
           });
 
           /* -- Launch outbound call with Twilio -- */
-          await twilioClient.calls.create({
-            url:  'https://ai-dialer.onrender.com/webhook',   // public HTTPS URL
-            to:   p.number,
-            from: process.env.TWILIO_PHONE_NUMBER,
-          });
+          try {
+            await twilioClient.calls.create({
+              url:  'https://ai-dialer.onrender.com/webhook',   // public HTTPS URL
+              to:   p.number,
+              from: process.env.TWILIO_PHONE_NUMBER,
+            });
+            console.log(`✅ Twilio queued ${p.number}`);
+          } catch (twilioErr) {
+            console.error('❌ Twilio error:', twilioErr.code, twilioErr.message);
+          }
 
           placedCalls += 1;
           if (placedCalls >= maxCalls) break;
@@ -162,7 +186,7 @@ app.get('/dealsync', async (req, res) => {
         if (placedCalls >= maxCalls) break;
       }
 
-      page += 1;                                   // next DealMachine page
+      page += 1;                                  // next DealMachine page
     }
 
     console.log(`✅ Called ${placedCalls} leads`);
