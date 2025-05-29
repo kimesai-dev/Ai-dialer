@@ -144,6 +144,25 @@ app.post('/log-lead', async (req, res) => {
     res.status(500).send('Failed to log lead');
   }
 });
+// === Test Google Sheets Logging ===
+app.get('/test-log', async (req, res) => {
+  try {
+    await logLead({
+      phone: '+12601234567',
+      address: '123 Testing St',
+      callTime: new Date().toISOString(),
+      tags: ['test'],
+      status: 'Test',
+      summary: 'Testing Sheets logging',
+      messages: [{ role: 'assistant', content: 'Hello from AI' }]
+    });
+
+    res.send('✅ Test row written to Google Sheet');
+  } catch (err) {
+    console.error('❌ Test log failed:', err.message);
+    res.status(500).send('Failed to log test lead');
+  }
+});
 
 // === Start Server ===
 const PORT = process.env.PORT || 5050;
