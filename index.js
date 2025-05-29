@@ -79,10 +79,14 @@ app.get('/dealsync', async (req, res) => {
       headers: {
         Authorization: `Bearer ${process.env.DEALMACHINE_API_KEY}`,
       },
+      params: {
+        tag: 'Follow Up Needed',
+      },
     });
 
     const leads = response.data?.data || [];
     console.log('🔍 Raw DealMachine leads:', JSON.stringify(leads.slice(0, 3), null, 2));
+    console.log('📊 First 3 leads:', leads.slice(0, 3));
 
     let count = 0;
 
