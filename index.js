@@ -3,6 +3,7 @@ import { config } from 'dotenv';
 import { OpenAI } from 'openai';
 import twilio from 'twilio';
 import axios from 'axios';
+import { google } from 'googleapis';
 
 config();
 
@@ -13,6 +14,13 @@ app.use(express.json());
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 const conversations = new Map();
+
+// Google Sheets setup
+const sheetsAuth = new google.auth.GoogleAuth({
+  keyFile: './service-account.json',
+  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+});
+const sheets = google.sheets({ version: 'v4', auth: sheetsAuth });
 
 const systemPrompt =
   "You're Daniel's AI assistant. A seller has just called in. Start the conversation by confirming who they are and asking if they’re open to a cash offer.";
@@ -105,6 +113,47 @@ app.get('/dealsync', async (req, res) => {
   } catch (err) {
     console.error('❌ DealMachine sync failed:', err.response?.data || err.message);
     res.status(500).send('Failed to sync leads');
+  }
+});
+
+// === Lead Logging Helper ===
+export async function logLead(data) {
+  const {
+    phone = '',
+    address = '',
+    status = '',
+    summary = '',
+    tags = [],
+    callTime = new Date().toISOString(),
+    messages = [],
+  } = data || {};
+
+  const row = [
+    phone,
+    address,
+    status,
+    summary,
+    Array.isArray(tags) ? tags.join(',') : '',
+    new Date(callTime).toISOString(),
+    JSON.stringify(messages),
+  ];
+
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: process.env.SHEET_ID,
+    range: 'Sheet1!A1',
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [row] },
+  });
+}
+
+// === Log Lead Route ===
+app.post('/log-lead', async (req, res) => {
+  try {
+    await logLead(req.body);
+    res.send('✅ Lead logged');
+  } catch (err) {
+    console.error('❌ Failed to log lead:', err.response?.data || err.message || err);
+    res.status(500).send('Failed to log lead');
   }
 });
 
