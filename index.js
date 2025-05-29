@@ -70,8 +70,9 @@ app.get('/', (_, res) => res.send('🧠 AI Dialer is running'));
 app.get('/dealsync', async (req, res) => {
   const maxCalls = parseInt(req.query.limit, 10) || 3;
 
+  /* ✅  DealMachine base URL */
   const dm = axios.create({
-    baseURL: 'https://dealmachine.app/api/v1',
+    baseURL: 'https://api.dealmachine.com/public/v1',
     headers: {
       Authorization: `Bearer ${process.env.DEALMACHINE_API_KEY}`,
       Accept: 'application/json',
@@ -83,7 +84,7 @@ app.get('/dealsync', async (req, res) => {
 
   try {
     while (placed < maxCalls) {
-      /*  🔑  LIST ENDPOINT IS /properties/  */
+      /* 🔑  LIST ENDPOINT */
       const { data: body, status, request } = await dm.get('/properties/', {
         params: {
           'filter[tags]': 'Follow Up Needed',
