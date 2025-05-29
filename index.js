@@ -71,28 +71,21 @@ app.get('/', (req, res) => {
 
 // === DealMachine Sync & Call Route ===
 app.get('/dealsync', async (req, res) => {
-  const { limit = 5 } = req.query;
-  const maxCalls = parseInt(limit, 10) || 5;
+  const maxCalls = parseInt(req.query.limit, 10) || 3;
 
   try {
-    const response = await axios.get('https://api.dealmachine.com/api/v1/properties', {
-      headers: {
-        Authorization: `Bearer ${process.env.DEALMACHINE_API_KEY}`,
-      },
-      params: {
-        tag: 'Follow Up Needed',
-      },
-    });
+    const response = await axios.get(
+      'https://api.dealmachine.com/api/v1/properties',
+      {
+        headers: { Authorization: `Bearer ${process.env.DEALMACHINE_API_KEY}` },
+        params: { tag: 'Follow Up Needed' },
+      }
+    );
 
     const leads = response.data?.data || [];
-    console.log('🔍 Raw DealMachine leads:', JSON.stringify(leads.slice(0, 3), null, 2));
-    console.log('📊 First 3 leads:', leads.slice(0, 3));
-
     let count = 0;
 
     for (const lead of leads) {
-      console.log("📦 Full lead attributes:", JSON.stringify(lead.attributes, null, 2));
-
       const phone =
         lead.attributes?.owner_phone ||
         lead.attributes?.contacts?.[0]?.phone ||
@@ -114,7 +107,7 @@ app.get('/dealsync', async (req, res) => {
           messages: [],
         });
       } catch (err) {
-        console.error('❌ Failed to log lead:', err.response?.data || err.message || err);
+        console.error(err.message);
       }
 
       await twilioClient.calls.create({
@@ -127,9 +120,10 @@ app.get('/dealsync', async (req, res) => {
       if (count >= maxCalls) break;
     }
 
-    res.send(`✅ Called ${count} DealMachine leads`);
+    console.log(`✅ Called ${count} leads`);
+    res.send(`✅ Called ${count} leads`);
   } catch (err) {
-    console.error('❌ DealMachine sync failed:', err.response?.data || err.message);
+    console.error(err.message);
     res.status(500).send('Failed to sync leads');
   }
 });
