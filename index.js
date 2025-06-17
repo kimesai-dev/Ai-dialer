@@ -176,6 +176,24 @@ app.get('/test-log', async (_, res) => {
   }
 });
 
+/* Temporary Supabase test route */
+app.get('/test-supabase', async (_, res) => {
+  try {
+    await logLead({
+      phone: '+15555550123',
+      address: '1 Supabase Way',
+      callTime: new Date().toISOString(),
+      tags: ['test'],
+      status: 'Testing',
+      summary: 'Supabase write test',
+      messages: [],
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 /* ----------  Start server  ---------- */
 const PORT = process.env.PORT || 5050;
 app.listen(PORT, () => console.log(`✅ Server listening on ${PORT}`));
